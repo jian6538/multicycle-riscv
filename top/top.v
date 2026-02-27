@@ -15,6 +15,7 @@ module RiscV_MultiCycle (
 
     // --- Internal Wires and Signals ---
     wire [31:0] pc_out;           // Current PC value
+    reg  [31:0] old_pc;           // Latch for branch/jump calculations
     wire [31:0] instruction;      // Instruction from Instruction Register
     
     // Decoded instruction fields
@@ -27,24 +28,37 @@ module RiscV_MultiCycle (
     wire        reg_write, mem_read, mem_write, mem_to_reg, branch, pc_write, ir_write, register_write_final;
     wire [1:0]  alu_op;
     wire [3:0]  alu_ctrl_signal;
-    wire        alu_src_a;        // Added missing declaration
-    wire [1:0]  alu_src_b;        // Added missing declaration
+    wire        alu_src_a;        
+    wire [1:0]  alu_src_b;        
+    wire [2:0]  fsm_state;        // Current state from FSM
 
     // Data path signals
     wire [31:0] read_data1, read_data2;
     wire [31:0] immediate;        
     wire [31:0] alu_result;
     wire        alu_zero;
-    wire [31:0] write_data;
+    reg  [31:0] write_data;       // Changed to reg for use in always block
+    wire [31:0] alu_out_reg;      // Stable ALU result from FSM
     
     // MUX output wires
-    wire [31:0] alu_src_final_a;  // Added missing declaration
-    wire [31:0] alu_src_final_b;  // Added missing declaration
+    wire [31:0] alu_src_final_a;  
+    wire [31:0] alu_src_final_b;  
+
+    // ==========================================
+    // 1. Internal Registers for Persistence
+    // ==========================================
+    always @(posedge clk) begin
+        if (rst) 
+            old_pc <= 32'b0;
+        else if (ir_write) 
+            old_pc <= pc_out; // Capture address of current instruction
+    end
 
 
-    // --- Module Instantiations ---
+    // ==========================================
+    // 2. Module Instantiations
+    // ==========================================
     
-    // 1. Control FSM
     ControlFSM control_fsm (
         .wb_clk(clk),
         .wb_rst(rst),
@@ -55,7 +69,6 @@ module RiscV_MultiCycle (
         .ir_write(ir_write),
         .wb_cyc_o(wb_cyc_o),
         .wb_stb_o(wb_stb_o),
-        .wb_addr_o(wb_adr_o),    
         .wb_we_o(wb_we_o),     
         .alu_src_a(alu_src_a),   
         .alu_src_b(alu_src_b),   
@@ -64,36 +77,29 @@ module RiscV_MultiCycle (
         .MemWrite(mem_write),
         .MemToReg(mem_to_reg),
         .Branch(branch),
-        .RegWrite(reg_write),                  // Fixed case sensitivity
-        .register_write_final(register_write_final) // Fixed case sensitivity & comma
+        .RegWrite(reg_write),                  
+        .register_write_final(register_write_final), // Fixed comma here!
+        .alu_out_reg(alu_out_reg), 
+        .fsm_state(fsm_state) // Exported state to help top-level muxing
+        // Note: wb_addr_o is intentionally disconnected from FSM here, handled by top-level MUX below
     );
 
-    // MUXes for ALU Inputs
-    assign alu_src_final_a = (alu_src_a) ? pc_out : read_data1; 
-    assign alu_src_final_b = (alu_src_b == 2'b00) ? read_data2 : 
-                             (alu_src_b == 2'b01) ? immediate : 
-                             32'd4; // 10: constant 4 for PC+4
-
-    // 2. Program Counter
-    // Assuming pc_unit uses PC_write as an enable signal, we just feed it alu_result.
     ProgramCounter pc_unit (
         .clk(clk),
         .rst(rst),
-        .pc_in(alu_result), // Next PC always calculated by the ALU in a multicycle!
+        .pc_in(alu_result), // Next PC always calculated by the ALU
         .PC_write(pc_write), 
         .pc_out(pc_out)
     );
 
-    // 3. Instruction Register (Holds wb_dat_i when ir_write is high)
     InstructionRegister ir (
         .clk(clk),
         .rst(rst),
         .ir_write(ir_write),
-        .instruction_in(wb_dat_i), // Fetched from Wishbone bus
+        .instruction_in(wb_dat_i), 
         .instruction_out(instruction)
     );
 
-    // 4. Instruction Decoder
     InstructionDecoder decoder (
         .instruction(instruction),
         .opcode(opcode),
@@ -104,7 +110,6 @@ module RiscV_MultiCycle (
         .funct7(funct7)
     );
 
-    // 5. ALU Control
     ALUControl alu_control_unit (
         .ALUOp(alu_op),
         .funct3(funct3),
@@ -112,18 +117,15 @@ module RiscV_MultiCycle (
         .ALUControl(alu_ctrl_signal)
     );
 
-    // 6. Immediate Generator
     ImmediateGenerator imm_gen (
         .instruction(instruction),
         .immediate(immediate)
     );
 
-    // 7. Register File
     RegisterFile reg_file (
         .clk(clk),
         .rst(rst),
-        // Important: use register_write_final to ensure we only write in the WRITEBACK stage
-        .write_enable(register_write_final), 
+        .write_enable(register_write_final), // Safely gated to WRITEBACK state
         .write_addr(rd),
         .write_data(write_data),
         .read_addr1(rs1),
@@ -132,7 +134,6 @@ module RiscV_MultiCycle (
         .read_data2(read_data2)
     );
 
-    // 8. ALU
     ALU alu_unit (
         .operand_a(alu_src_final_a),
         .operand_b(alu_src_final_b),
@@ -141,13 +142,42 @@ module RiscV_MultiCycle (
         .z(alu_zero)
     );
 
-    // --- External Memory Routing Logic ---
+
+    // ==========================================
+    // 3. Datapath Multiplexers (Routing Logic)
+    // ==========================================
+
+    // ALU Source A MUX
+    // If alu_src_a is 0: Use Register 1.
+    // If alu_src_a is 1: If we are in FETCH (0), use current PC to do PC+4. 
+    //                    Otherwise, use old_pc to calculate Branch targets.
+    assign alu_src_final_a = (alu_src_a == 1'b0) ? read_data1 : 
+                             (fsm_state == 3'd0) ? pc_out : old_pc;
+
+    // ALU Source B MUX
+    assign alu_src_final_b = (alu_src_b == 2'b00) ? read_data2 : 
+                             (alu_src_b == 2'b01) ? immediate : 
+                             32'd4; // 10: constant 4 for PC+4
+
+    // Register Write Data MUX
+    always @(*) begin
+        if (opcode == 7'b1101111 || opcode == 7'b1100111) // JAL or JALR
+            write_data = pc_out; // pc_out holds PC+4 at this stage
+        else if (mem_to_reg)
+            write_data = wb_dat_i; // Load from memory
+        else
+            write_data = alu_out_reg; // Stable ALU math result
+    end
+
+    // ==========================================
+    // 4. External Wishbone Memory Routing
+    // ==========================================
     
-    // Route data to be stored out to the Wishbone bus
+    // Data to be stored out to memory
     assign wb_dat_o = read_data2;
 
-    // MUX for write-back data to the Register File
-    // If it's a load (mem_to_reg), take data from the Wishbone input bus. Otherwise, take ALU result.
-    assign write_data = mem_to_reg ? wb_dat_i : alu_result;
+    // Wishbone Address MUX
+    // If FETCH (state 0), request PC. Otherwise, request stable ALU Address.
+    assign wb_adr_o = (fsm_state == 3'd0) ? pc_out : alu_out_reg;
 
 endmodule

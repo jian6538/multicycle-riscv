@@ -21,9 +21,14 @@ module ControlFSM (
     output reg         MemToReg,
     output reg         Branch,
     output reg [1:0]   ALUOp,
-    output reg         register_write_final // Fixed missing comma
-);
+    output reg   register_write_final, // Fixed missing comma
+    output reg [31:0] alu_out_reg, // Register to hold ALU result for branch decision
+    output wire [2:0] fsm_state
 
+);
+    
+
+     // Define constants for the opcodes for clarity
     // =============================
     // 1️⃣ State Encoding
     // =============================
@@ -32,6 +37,7 @@ module ControlFSM (
     localparam EXECUTE   = 3'd2;
     localparam MEM       = 3'd3;
     localparam WRITEBACK = 3'd4;
+    localparam BRANCH    = 3'd5; // Optional state for branch handling
     
     // Define constants for the opcodes for clarity
     localparam OPCODE_RTYPE = 7'b0110011;
@@ -50,10 +56,15 @@ module ControlFSM (
     // 2️⃣ State Register
     // =============================
     always @(posedge wb_clk) begin
-        if (wb_rst)
+        if (wb_rst) begin
             state <= FETCH;
-        else
+            alu_out_reg <= 0; // Clear ALU result register on reset
+        end else begin
             state <= next_state;
+            alu_out_reg <= alu_result; // Capture ALU result for branch decision
+        end
+
+
     end
 
     // =============================
@@ -78,8 +89,14 @@ module ControlFSM (
                              opcode == OPCODE_LUI || opcode == OPCODE_AUIPC || 
                              opcode == OPCODE_JAL || opcode == OPCODE_JALR) begin
                     next_state = WRITEBACK;
+                end else if(opcode == OPCODE_BEQ) begin
+                    if(alu_result == 0) begin
+                        next_state = BRANCH; // Branch taken
+                    end else begin
+                        next_state = FETCH;  // Branch not taken, go back to fetch
+                    end
                 end else begin
-                    next_state = FETCH; // BEQ or unknown ends execution here
+                    next_state = FETCH; // For unsupported opcodes, just go back to fetch
                 end
             end
             MEM: begin
@@ -92,6 +109,9 @@ module ControlFSM (
             end
             WRITEBACK: begin
                 next_state = FETCH;
+            end
+            BRANCH: begin
+              next_state = FETCH;
             end
             default: next_state = FETCH;
         endcase
@@ -126,9 +146,9 @@ module ControlFSM (
                 wb_cyc_o = 1;
                 wb_stb_o = 1;
                 wb_we_o  = 0;        
-                alu_src_a = 1;       
-                alu_src_b = 2'b10;   
-                alu_op    = 2'b00;   
+                alu_src_a = 1; 
+                alu_src_b = 2'b10; 
+                alu_op = 2'b00;
 
                 if (mem_ack) begin
                     ir_write = 1;    
@@ -208,7 +228,7 @@ module ControlFSM (
                 wb_cyc_o  = 1;
                 wb_stb_o  = 1;
                 wb_we_o   = MemWrite; 
-                wb_addr_o = alu_result; 
+                wb_addr_o = alu_out_reg; // Use registered ALU result for stable address during memory access
             end
             
             WRITEBACK: begin
@@ -217,7 +237,13 @@ module ControlFSM (
                 RegWrite = 1; 
                 register_write_final = 1; 
             end
+            BRANCH: begin
+                alu_src_a = 1;       // Operand A from register (rs1)
+                alu_src_b = 2'b01;   // Operand B from register (rs2)
+                pc_write  = 1;       // Update PC to branch target
+                ALUOp = 2'b00; // No specific ALU operation needed for branch handling
+            end
         endcase
     end
-
+    assign fsm_state = state;
 endmodule

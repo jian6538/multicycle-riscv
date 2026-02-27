@@ -8,7 +8,7 @@ module alu(
 	output reg  [31:0] result,       // 32-bit result of the operation
 	output wire        z             // Zero flag (1 if result is 0)
 );
-
+    
     // Define constants for the ALU operations for clarity
     localparam OP_ADD  = 4'b0000;
     localparam OP_SUB  = 4'b0001;
