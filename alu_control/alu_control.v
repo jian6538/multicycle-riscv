@@ -8,7 +8,7 @@ module ALUControl (
     input  wire [1:0]  ALUOp,       // From the main Control Unit (R-type, I-type, etc.)
     input  wire [2:0]  funct3,      // From the instruction's funct3 field
     input  wire [6:0]  funct7,      // From the instruction's funct7 field
-
+    input  wire [6:0]  opcode,
     // Output Signal
     output reg [3:0]  ALUControl   // The 4-bit control code for the ALU
 );
@@ -45,7 +45,7 @@ module ALUControl (
             2'b10: begin
                 case (funct3)
                     3'b000: begin // ADD or SUB
-                        if (funct7 == 7'b0100000) begin
+                        if (funct7 == 7'b0100000 && opcode[5] == 1) begin
                             ALUControl = OP_SUB; // SUB instruction
                         end else begin
                             ALUControl = OP_ADD; // ADD instruction

@@ -87,7 +87,7 @@ module RiscV_MultiCycle (
     ProgramCounter pc_unit (
         .clk(clk),
         .rst(rst),
-        .pc_in((opcode == 7'b1101111 || opcode == 7'b1100111) ? alu_out_reg : alu_result), // Next PC always calculated by the ALU
+        .pc_in(((opcode == 7'b1101111 || opcode == 7'b1100111) ? alu_out_reg : alu_result) & 32'hFFFFFFFE), // Next PC always calculated by the ALU
         .pc_write(pc_write), 
         .pc_out(pc_out)
     );
@@ -113,6 +113,7 @@ module RiscV_MultiCycle (
     ALUControl alu_control_unit (
         .ALUOp(alu_op),
         .funct3(funct3),
+        .opcode(opcode),
         .funct7(funct7),
         .ALUControl(alu_ctrl_signal)
     );
