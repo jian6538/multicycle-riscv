@@ -25,6 +25,7 @@ module ALUControl (
     localparam OP_AND  = 4'b0111;
     localparam OP_SRL  = 4'b1000;
     localparam OP_SRA  = 4'b1001;
+    localparam OP_LUI  = 4'b1010; // Example for LUI, adjust as needed
 
 
     // --- Combinational Logic for ALU Control Signal ---
@@ -64,6 +65,7 @@ module ALUControl (
                     end
                     3'b110: ALUControl = OP_OR;   // OR instruction rd = rs1 | rs2
                     3'b111: ALUControl = OP_AND;  // AND instruction rd = rs1 & rs2
+                    3'b100: ALUControl = OP_LUI;  // LUI instruction rd = imm[31:12] << 12 (handled specially in the ALU)
                     default: ALUControl = 4'bxxxx; // Should not happen 
                 endcase
             end

@@ -236,6 +236,9 @@ module ControlFSM (
                 if (opcode == OPCODE_LW) MemToReg = 1;
                 RegWrite = 1; 
                 register_write_final = 1; 
+                if (opcode == OPCODE_JAL || opcode == OPCODE_JALR) begin
+                    pc_write = 1;
+                end
             end
             BRANCH: begin
                 alu_src_a = 1;       // Operand A from register (rs1)

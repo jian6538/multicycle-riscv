@@ -87,8 +87,8 @@ module RiscV_MultiCycle (
     ProgramCounter pc_unit (
         .clk(clk),
         .rst(rst),
-        .pc_in(alu_result), // Next PC always calculated by the ALU
-        .PC_write(pc_write), 
+        .pc_in((opcode == 7'b1101111 || opcode == 7'b1100111) ? alu_out_reg : alu_result), // Next PC always calculated by the ALU
+        .pc_write(pc_write), 
         .pc_out(pc_out)
     );
 
@@ -123,9 +123,9 @@ module RiscV_MultiCycle (
     );
 
     RegisterFile reg_file (
-        .clk(clk),
-        .rst(rst),
-        .write_enable(register_write_final), // Safely gated to WRITEBACK state
+        .wb_clk(clk),
+        .wb_rst(rst),
+        .wb_we(register_write_final), // Safely gated to WRITEBACK state
         .write_addr(rd),
         .write_data(write_data),
         .read_addr1(rs1),
@@ -163,6 +163,8 @@ module RiscV_MultiCycle (
     always @(*) begin
         if (opcode == 7'b1101111 || opcode == 7'b1100111) // JAL or JALR
             write_data = pc_out; // pc_out holds PC+4 at this stage
+        `else if (opcode == 7'b0110111) // LUI
+            write_data = immediate; // LUI writes the immediate value directly to the register
         else if (mem_to_reg)
             write_data = wb_dat_i; // Load from memory
         else
